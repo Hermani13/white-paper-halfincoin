@@ -1,0 +1,127 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract HalfinCoin is IERC20 {
+    string public constant name = "Halfin Coin";
+    string public constant symbol = "HALF";
+    uint8 public constant decimals = 18;
+    uint256 public constant maxSupply = 21_000_000 * (10 ** uint256(decimals));
+    uint256 public override totalSupply;
+
+    uint256 public constant initialRewardPerInterval = 50 * (10 ** uint256(decimals));
+    uint256 public constant rewardInterval = 10 minutes;
+    uint256 public lastRewardTime;
+    uint256 public constant rewardHalvingInterval = 720 days;
+    uint256 public currentReward = initialRewardPerInterval;
+    uint256 public currentDifficulty = 1;
+    uint256 public lastDifficultyAdjustmentTime;
+    uint256 public constant difficultyAdjustmentInterval = 63072000; // 2 anos em segundos
+    uint256 public constant maxTransactionFee = 1000; // 0.000001 HALF
+    uint256 public constant minConfirmations = 6; // Definir um número mínimo de confirmações
+
+    address public miner;
+    mapping(address => uint256) public override balanceOf;
+    mapping(address => mapping(address => uint256)) public override allowance;
+
+    event Reward(address indexed miner, uint256 value);
+
+    constructor(uint256 initialSupply) {
+        require(initialSupply <= maxSupply, "Initial supply exceeds max supply");
+        totalSupply = initialSupply * (10 ** uint256(decimals));
+        balanceOf[msg.sender] = totalSupply;
+        miner = msg.sender;
+        lastRewardTime = block.timestamp;
+        lastDifficultyAdjustmentTime = block.timestamp;
+    }
+
+    function getReward() internal returns (uint256) {
+        uint256 elapsedTime = block.timestamp - lastRewardTime;
+        uint256 rewards = 0;
+
+        if (elapsedTime >= rewardInterval) {
+            rewards = currentReward * (elapsedTime / rewardInterval);
+            currentReward = currentReward / 2; // Halve the reward
+            lastRewardTime += (elapsedTime / rewardInterval) * rewardInterval; // Update last reward time
+            balanceOf[miner] += rewards;
+            totalSupply += rewards;
+            emit Reward(miner, rewards);
+        }
+        return rewards;
+    }
+
+    function adjustDifficulty() internal {
+        uint256 elapsedTime = block.timestamp - lastDifficultyAdjustmentTime;
+        
+        if (elapsedTime >= difficultyAdjustmentInterval) {
+            currentDifficulty = currentDifficulty * 2; // Double the difficulty
+            lastDifficultyAdjustmentTime += (elapsedTime / difficultyAdjustmentInterval) * difficultyAdjustmentInterval; // Update last difficulty adjustment time
+        }
+    }
+
+    function mine() external {
+        require(msg.sender == miner, "Only the designated miner can mine");
+        uint256 rewards = getReward();
+        adjustDifficulty();
+        emit Transfer(address(0), miner, rewards);
+    }
+
+    function transfer(address to, uint256 value) external override returns (bool) {
+        require(to != address(0), "ERC20: transfer to the zero address");
+        require(balanceOf[msg.sender] >= value, "ERC20: transfer amount exceeds balance");
+        
+        uint256 finalValue = value;
+        if (msg.sender != miner) {
+            require(value >= maxTransactionFee, "Transaction amount must be greater than or equal to transaction fee");
+            uint256 fee = maxTransactionFee;
+            finalValue = value - fee;
+            balanceOf[msg.sender] -= fee;
+            balanceOf[miner] += fee;
+            emit Transfer(msg.sender, miner, fee);
+        }
+        
+        balanceOf[msg.sender] -= finalValue;
+        balanceOf[to] += finalValue;
+        emit Transfer(msg.sender, to, finalValue);
+        return true;
+    }
+
+    function approve(address spender, uint256 value) external override returns (bool) {
+        allowance[msg.sender][spender] = value;
+        emit Approval(msg.sender, spender, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value) external override returns (bool) {
+        require(to != address(0), "ERC20: transfer to the zero address");
+        require(balanceOf[from] >= value, "ERC20: transfer amount exceeds balance");
+        require(allowance[from][msg.sender] >= value, "ERC20: transfer amount exceeds allowance");
+        
+        uint256 finalValue = value;
+        if (from != miner) {
+            require(value >= maxTransactionFee, "Transaction amount must be greater than or equal to transaction fee");
+            uint256 fee = maxTransactionFee;
+            finalValue = value - fee;
+            balanceOf[from] -= fee;
+            balanceOf[miner] += fee;
+            emit Transfer(from, miner, fee);
+        }
+        
+        balanceOf[from] -= finalValue;
+        balanceOf[to] += finalValue;
+        allowance[from][msg.sender] -= finalValue;
+        emit Transfer(from, to, finalValue);
+        return true;
+    }
+}
